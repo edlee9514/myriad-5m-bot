@@ -42,15 +42,27 @@ ALL_ASSETS = list(ASSET_MAP.keys())
 #  1. DATA FETCH
 # ─────────────────────────────────────────────────────────────────
 
-def fetch_1m_candles(days: int, symbol: str = "BTCUSDT") -> pd.DataFrame:
-    """Fetch `days` worth of 1m candles from Binance for given symbol."""
-    end_ms   = int(datetime.now(timezone.utc).timestamp() * 1000)
-    start_ms = end_ms - days * 24 * 3600 * 1000
+def fetch_1m_candles(days: int, symbol: str = "BTCUSDT",
+                     start_date: str = None, end_date: str = None) -> pd.DataFrame:
+    """Fetch 1m candles from Binance. Uses start_date/end_date if provided, else last N days."""
+    if start_date:
+        start_ms = int(datetime.strptime(start_date, "%Y-%m-%d").replace(
+            tzinfo=timezone.utc).timestamp() * 1000)
+        if end_date:
+            end_ms = int(datetime.strptime(end_date, "%Y-%m-%d").replace(
+                tzinfo=timezone.utc).timestamp() * 1000)
+        else:
+            end_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+        days = (end_ms - start_ms) // (24 * 3600 * 1000)
+    else:
+        end_ms   = int(datetime.now(timezone.utc).timestamp() * 1000)
+        start_ms = end_ms - days * 24 * 3600 * 1000
 
     all_rows = []
     current  = start_ms
 
-    print(f"Fetching {days}d of {symbol} 1m candles from Binance...")
+    label = f"{start_date or ''} → {end_date or 'now'}".strip(" →") or f"last {days}d"
+    print(f"Fetching {symbol} 1m candles ({label})...")
     while current < end_ms:
         resp = requests.get(BINANCE_URL, params={
             "symbol":    symbol,
@@ -668,15 +680,18 @@ def build_results_sheet(w: pd.DataFrame, df1m: pd.DataFrame, momentum_rows=None)
 #  MAIN
 # ─────────────────────────────────────────────────────────────────
 
-def run_backtest(asset: str, days: int, verbose: bool = False):
+def run_backtest(asset: str, days: int, verbose: bool = False,
+                 start_date: str = None, end_date: str = None):
     """Run full backtest for a single asset."""
     symbol = ASSET_MAP[asset]
+    label = f"{start_date} → {end_date}" if start_date else f"{days}d"
     print(f"\n{'█'*70}")
-    print(f"  {asset} ({symbol})  —  {days}d backtest")
+    print(f"  {asset} ({symbol})  —  {label} backtest")
     print(f"{'█'*70}")
 
     # 1. Fetch
-    df1m = fetch_1m_candles(days, symbol=symbol)
+    df1m = fetch_1m_candles(days, symbol=symbol,
+                            start_date=start_date, end_date=end_date)
 
     # 2. Build windows
     df_c = classify_candles(df1m)
@@ -698,7 +713,8 @@ def run_backtest(asset: str, days: int, verbose: bool = False):
 
     # 7. Export to Excel (data + results sheets)
     import shutil, tempfile
-    out = f"myriad_backtest_{asset}_{days}d.xlsx"
+    tag = f"{start_date}_{end_date}" if start_date else f"{days}d"
+    out = f"myriad_backtest_{asset}_{tag}.xlsx"
     results_df = build_results_sheet(w, df1m, momentum_rows)
     w_export = w.copy()
     w_export.index = w_export.index.tz_localize(None)
@@ -720,6 +736,8 @@ def run_backtest(asset: str, days: int, verbose: bool = False):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--days",    type=int, default=30, help="Days of history (default 30)")
+    parser.add_argument("--start",   type=str, default=None, help="Start date YYYY-MM-DD")
+    parser.add_argument("--end",     type=str, default=None, help="End date YYYY-MM-DD")
     parser.add_argument("--symbol",  type=str, default="BTC",
                         choices=ALL_ASSETS, help="Asset to backtest (default BTC)")
     parser.add_argument("--all",     action="store_true", help="Run all assets")
@@ -729,7 +747,8 @@ def main():
     assets = ALL_ASSETS if args.all else [args.symbol.upper()]
 
     for asset in assets:
-        run_backtest(asset, args.days, args.verbose)
+        run_backtest(asset, args.days, args.verbose,
+                     start_date=args.start, end_date=args.end)
 
 
 if __name__ == "__main__":

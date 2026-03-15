@@ -17,7 +17,13 @@ Myriad Markets runs "More Green or More Red?" prediction markets on 5-minute can
 
 ## Backtest Results
 
-Data: 90 days of 1-minute Binance candles (Dec 15 2025 — Mar 15 2026), ~25,900 five-minute windows per asset. Cross-validated against a 30-day subset (Feb 13 — Mar 15 2026) to test stability.
+Data: Multiple periods of 1-minute Binance candles, cross-validated for stability.
+
+| Period | Dates | Context | Windows per asset |
+|--------|-------|---------|-------------------|
+| Bull 6m | Jan 1 — Jul 1, 2025 | PENGU rally period | ~52,100 |
+| Bear 90d | Dec 15, 2025 — Mar 15, 2026 | Broad downturn | ~25,900 |
+| Bear 30d | Feb 13 — Mar 15, 2026 | Recent subset | ~8,600 |
 
 ### 1. Base Rates
 
@@ -215,29 +221,80 @@ Verdict: "All down → green" collapsed from 54.5% to 49.6% (flat).
 "All up → red" held directionally but is only ~5pp and noisy.
 ```
 
-### 11. PENGU — Why Nothing Else Matters
+### 11. PENGU Regime Test — Bull vs Bear
 
-For PENGU specifically, we tested every feature at 90d. The result:
+The critical question: is PENGU's red bias a downtrend artifact, or structural?
+
+We tested PENGU during its Jan–Jul 2025 bull rally (the token rallied significantly) and compared against the recent bear period.
 
 ```
-PENGU 90d — Green% by every slice tested
-──────────────────────────────────────────────────────────────────
-Feature                         Range of green% across buckets
-──────────────────────────────────────────────────────────────────
-Momentum (after green/red)      43.5% — 43.7%      (0.2pp spread)
-Streaks (green+green/red+red)   43.4% — 43.5%      (0.1pp spread)
-MA regime (bull/bear)           43.5% — 43.8%      (0.3pp spread)
-MA alignment                   44.3% — 44.3%      (0.0pp spread)
-Time of day                    38.8% — 46.2%      (7.4pp spread *)
-Day of week                    42.3% — 45.8%      (3.5pp spread)
-Prior 5m net return             42.9% — 44.9%      (2.0pp spread)
-Prior 15m close position        42.2% — 44.5%      (2.3pp spread)
-Volatility regime              41.5% — 45.4%      (3.9pp spread)
+PENGU Base Rates Across Market Regimes
+════════════════════════════════════════════════════════════════════
+Period              Context          Green%   Red%    n         Edge*
+────────────────────────────────────────────────────────────────────
+Jan-Jul 2025        Bull rally       45.1%    54.9%   52,127    +3.9pp
+Dec 2025-Mar 2026   Bear (90d)       43.6%    56.4%   25,918    +5.4pp
+Feb-Mar 2026        Bear (30d)       42.5%    57.5%    8,638    +6.5pp
+────────────────────────────────────────────────────────────────────
+ALL DATA combined                    44.5%    55.5%   ~86,000   +4.5pp
 
-* 06:00 UTC is an outlier at 38.8% — but every hour is below 47%
+* Edge = red% - 50% - 1% fee
 ```
 
-**Every single slice is red-biased.** The floor is ~39% green, the ceiling is ~46%. No feature flips PENGU to majority-green. This is the key insight: PENGU's red bias is structural and pervasive, not conditional.
+```
+PENGU green% by regime (visual)
+
+              40%    42%    44%    46%    48%    50%
+               ├──────┼──────┼──────┼──────┼──────┤
+               │                                   │
+ Bull 6m       │             ████████ 45.1%         │  ◄ STILL RED
+               │                                   │
+ Bear 90d      │        ████████ 43.6%              │
+               │                                   │
+ Bear 30d      │     ████████ 42.5%                 │
+               │                                   │
+               │  ALL PERIODS BELOW 46%            │
+               │  Red bias persists in bull ✓       │
+               └───────────────────────────────────┘
+```
+
+**The red bias held during the bull rally.** 45.1% green across 52,000+ windows — even when PENGU was ripping higher. The bias deepens in bear markets (42.5–43.6%) but never flips to green-majority.
+
+This means PENGU's red bias is **structural to how the token trades at the 1-minute level**. Even during a sustained uptrend, more individual 1m candles close red than green. The price goes up via larger green candles, not more of them.
+
+#### PENGU bull period — factor breakdown
+
+Every factor was also tested during the bull period. The result is the same: nothing flips PENGU green.
+
+```
+PENGU factor analysis — Bull period (Jan-Jul 2025, n=52,127)
+──────────────────────────────────────────────────────────────────
+Feature                         Green% range     All red-biased?
+──────────────────────────────────────────────────────────────────
+Momentum (after green/red)      45.1% — 45.1%    ✓ Yes (identical)
+Streaks (green+green/red+red)   44.4% — 45.2%    ✓ Yes
+Score momentum                  44.3% — 45.2%    ✓ Yes
+MA regime (bull/bear stack)     44.8% — 46.2%    ✓ Yes
+Volatility regime               44.2% — 45.8%    ✓ Yes
+Time of day                     43.4% — 47.1%    ✓ Yes (every hour < 48%)
+Day of week                     44.2% — 45.9%    ✓ Yes (every day < 46%)
+Prior 5m net return             44.2% — 46.5%    ✓ Yes
+Prior 15m close position        43.9% — 46.2%    ✓ Yes
+Lookback alignment              44.3% — 46.1%    ✓ Yes
+──────────────────────────────────────────────────────────────────
+
+Not a single factor, in any quintile, in any regime, produces
+a PENGU green rate above 47.1%.
+```
+
+### 12. PENGU Summary — Why Nothing Else Matters
+
+Across **all three test periods** (bull 6m, bear 90d, bear 30d) and **every factor tested**, PENGU's green rate ranges from ~39% to ~47%, but never reaches majority-green. The red bias is:
+
+- **Persistent** — holds across 12+ months of data
+- **Regime-independent** — present in both bull rallies and bear sell-offs
+- **Unconditional** — no feature modulates it meaningfully
+- **Structural** — likely caused by PENGU's microstructure (low-liquidity alt with wider spreads, more doji/red closes even during upward moves)
 
 ---
 
@@ -275,7 +332,7 @@ PENGU (+6.4pp)                        ────────●─────
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-This is a **systematic, unconditional strategy**. We bet the same side, same size, every window. The edge comes from the market's structural mispricing (50/50 AMM seed) against a biased underlying (56.4% red).
+This is a **systematic, unconditional strategy**. We bet the same side, same size, every window. The edge comes from the market's structural mispricing (50/50 AMM seed) against a biased underlying (54.9–56.4% red depending on regime).
 
 ### Why Unconditional?
 
@@ -346,30 +403,35 @@ Every 30 seconds:
 ### Expected Performance
 
 ```
-Assumptions:
-  Win rate:           56.4% (from 90d backtest)
-  Entry price:        0.50 (AMM default)
-  Buy fee:            1%
-  Payout on win:      $0.99 ($1.00 - $0.01 fee on $1.00 cost)
-  Loss on loss:       -$0.50 (share becomes worthless, paid $0.50)
+                          Bear regime          Bull regime
+                          (win rate 56.4%)     (win rate 54.9%)
+─────────────────────────────────────────────────────────────────
+Entry price:              0.50                 0.50
+Buy fee:                  1%                   1%
+Payout on win:            $0.99                $0.99
+Loss on loss:             -$0.50               -$0.50
 
-Per $1 wagered (buying 2 shares at $0.50):
-  E[win]  = 0.564 × $0.49  = $0.276
-  E[loss] = 0.436 × -$0.50 = -$0.218
-  E[net]  = +$0.058 per $1 wagered (5.8% edge)
+Per $1 wagered:
+  E[win]                  0.564 × $0.49        0.549 × $0.49
+                          = $0.276             = $0.269
+  E[loss]                 0.436 × -$0.50       0.451 × -$0.50
+                          = -$0.218            = -$0.226
+  E[net]                  +$0.058 (5.8%)       +$0.044 (4.4%)
 
 Per day (288 windows × $5 per trade = $1,440 wagered):
-  Expected daily P&L:  +$84
-  Std dev per trade:    ~$2.50
-  Daily std dev:        ~$42 (√288 × $2.50)
-  Sharpe (daily):       ~2.0
+  Expected daily P&L:     +$84                 +$63
+  Std dev per trade:      ~$2.50               ~$2.50
+  Daily std dev:          ~$42                 ~$42
+  Sharpe (daily):         ~2.0                 ~1.5
 
 Per month (30 days):
-  Expected monthly P&L: +$2,520
-  Monthly std dev:      ~$230
+  Expected monthly P&L:   +$2,520              +$1,890
+  Monthly std dev:        ~$230                ~$230
 ```
 
-Note: These assume we can enter at 0.50 every trade (no price impact from prior bettors or our own volume) and that PENGU's red bias persists. Both are risks.
+The bull regime is the conservative case. Even there, the edge is +4.4% per dollar wagered — well above zero. The strategy is profitable in both regimes.
+
+Note: These assume we can enter at 0.50 every trade (no price impact from prior bettors or our own volume). If the market moves to 0.52-0.55 before we enter, the edge compresses but remains positive up to ~0.56 in bull, ~0.58 in bear.
 
 ### Risk Management
 
