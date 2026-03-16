@@ -37,6 +37,13 @@ class Executor:
             self.account = None
             self.address = None
 
+        # Myriad smart account holds the funds; signer wallet sends txs
+        self.myriad_wallet = (
+            Web3.toChecksumAddress(config.MYRIAD_WALLET)
+            if config.MYRIAD_WALLET
+            else self.address
+        )
+
     def _to_wei(self, amount: float) -> int:
         return int(amount * 10 ** config.USD1_DECIMALS)
 
@@ -123,6 +130,14 @@ class Executor:
             "value": value,
             "dry_run": False,
         }
+
+    def claim_winnings(self, market_id: int) -> str:
+        """Claim winnings from a resolved market. Returns tx hash."""
+        log.info(f"Claiming winnings for market {market_id}")
+        if self.dry_run:
+            log.info("[DRY RUN] Skipping claim")
+            return "0x_dry_run"
+        return self._send_tx(self.pm.functions.claimWinnings(market_id))
 
     def _send_tx(self, fn) -> str:
         """Build, sign, and send a transaction. Returns tx hash hex."""

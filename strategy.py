@@ -2,6 +2,7 @@
 
 import logging
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
 import config
@@ -16,6 +17,7 @@ class Decision:
     market_id: Optional[int] = None
     outcome_id: Optional[int] = None
     price: Optional[float] = None
+    bet_size: Optional[float] = None
 
 
 def evaluate(market: Dict, daily_pnl: float, trade_history: List[Dict]) -> Decision:
@@ -62,13 +64,19 @@ def evaluate(market: Dict, daily_pnl: float, trade_history: List[Dict]) -> Decis
             price=red_price,
         )
 
+    # ── Bet sizing by hour ─────────────────────────────────────────────
+    hour = datetime.now(timezone.utc).hour
+    multiplier = config.HOUR_MULTIPLIER.get(hour, 1.0)
+    bet_size = round(config.BET_SIZE_USD * multiplier, 2)
+
     # ── All clear → buy ──────────────────────────────────────────────
     return Decision(
         action="buy",
-        reason=f"Entry signal: 'More Red' @ {red_price:.4f}",
+        reason=f"Entry signal: 'More Red' @ {red_price:.4f} ({multiplier}x @ {hour:02d}:00 UTC)",
         market_id=market_id,
         outcome_id=config.TARGET_OUTCOME_ID,
         price=red_price,
+        bet_size=bet_size,
     )
 
 

@@ -28,14 +28,46 @@ _traded_markets = set()  # type: set
 _running = True
 
 
+def _calc_sleep() -> float:
+    """Sleep until just before the next market is expected to publish.
+
+    Markets are on 5-minute boundaries (00:00, 00:05, 00:10, ...) and
+    publish ~8 minutes early. So the market for 00:10 publishes at ~00:02.
+
+    We want to poll ~5 seconds after each expected publish time to catch
+    new markets immediately while keeping API calls low (~12/hour).
+    """
+    now = datetime.now(timezone.utc)
+    # Minutes into the current 5-min block
+    mins_into_block = now.minute % 5
+    secs_into_block = mins_into_block * 60 + now.second
+
+    # Next 5-min boundary is in (300 - secs_into_block) seconds
+    # Markets publish ~2 min after the previous 5-min boundary
+    # (i.e., 8 min before the window they cover)
+    # So publish times are at :02, :07, :12, :17, ... (roughly)
+    # We target 5 seconds after each publish: :02:05, :07:05, etc.
+    target_offset = 2 * 60 + 5  # 2min 5sec into each 5-min block
+
+    if secs_into_block < target_offset:
+        wait = target_offset - secs_into_block
+    else:
+        wait = (300 - secs_into_block) + target_offset
+
+    # Clamp: minimum 10s (don't spam), maximum 300s (don't oversleep)
+    wait = max(10, min(wait, 300))
+    log.debug(f"Next poll in {wait:.0f}s")
+    return wait
+
+
 def _shutdown(signum, frame):
     global _running
     log.info("Shutdown signal received — finishing current cycle...")
     _running = False
 
 
-def resolve_pending(trade_logger: TradeLogger):
-    """Check if any pending trades have resolved and update results."""
+def resolve_pending(trade_logger: TradeLogger, executor: 'Executor'):
+    """Check if any pending trades have resolved, claim winnings, update results."""
     pending = trade_logger.pending_trades()
     if not pending:
         return
@@ -58,10 +90,11 @@ def resolve_pending(trade_logger: TradeLogger):
         value = float(trade["value"])
 
         if result_title == config.TARGET_OUTCOME:
-            # Win: receive share value (≈1.0 per share) minus the cost
-            pnl = value * (1.0 / float(trade["entry_price"]) - 1) * (1 - 0.01)
-            # Simplified: payout ≈ value/price - value = value*(1/price - 1)
-            # With 1% fee already baked into entry, net pnl:
+            # Win — claim winnings from the contract
+            try:
+                executor.claim_winnings(market_id)
+            except Exception as e:
+                log.error(f"Failed to claim market {market_id}: {e}")
             pnl = float(trade["shares"]) - value
         else:
             # Loss: lose the entire stake
@@ -77,7 +110,7 @@ def resolve_pending(trade_logger: TradeLogger):
 def run_cycle(executor: Executor, trade_logger: TradeLogger):
     """Run one poll-decide-execute cycle."""
     # 1. Resolve any pending trades
-    resolve_pending(trade_logger)
+    resolve_pending(trade_logger, executor)
 
     # 2. Find next open PENGU candle market
     market = myriad.find_next_pengu_market()
@@ -109,26 +142,33 @@ def run_cycle(executor: Executor, trade_logger: TradeLogger):
         _traded_markets.add(market_id)
         return
 
-    # 4. Execute trade
-    log.info(f">>> {decision.reason}")
+    # 4. Check balance before executing
+    bet_size = decision.bet_size
+    balance = executor.get_usd1_balance()
+    if balance < bet_size:
+        log.warning(f"Insufficient USD1 balance: {balance:.4f} < {bet_size}")
+        return
+
+    # 5. Execute trade
+    log.info(f">>> {decision.reason} | bet ${bet_size:.2f}")
     try:
         result = executor.buy(
             market_id=market_id,
             outcome_id=config.TARGET_OUTCOME_ID,
-            value=config.BET_SIZE_USD,
+            value=bet_size,
         )
     except Exception as e:
         log.error(f"Trade execution failed: {e}")
         return
 
-    # 5. Log the trade
+    # 6. Log the trade
     trade_logger.log_entry(
         market_id=market_id,
         slug=market["slug"],
         asset=config.TARGET_ASSET,
         side=config.TARGET_OUTCOME,
         entry_price=decision.price,
-        value=config.BET_SIZE_USD,
+        value=bet_size,
         shares=result["shares_expected"],
         tx_hash=result["tx_hash"],
     )
@@ -150,11 +190,20 @@ def main():
     )
     args = parser.parse_args()
 
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        datefmt="%H:%M:%S",
-    )
+    log_format = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+    log_datefmt = "%Y-%m-%d %H:%M:%S"
+
+    # Log to both console and file
+    root = logging.getLogger()
+    root.setLevel(logging.INFO)
+
+    console = logging.StreamHandler()
+    console.setFormatter(logging.Formatter(log_format, datefmt=log_datefmt))
+    root.addHandler(console)
+
+    file_handler = logging.FileHandler("bot.log")
+    file_handler.setFormatter(logging.Formatter(log_format, datefmt=log_datefmt))
+    root.addHandler(file_handler)
 
     signal.signal(signal.SIGINT, _shutdown)
     signal.signal(signal.SIGTERM, _shutdown)
@@ -195,7 +244,7 @@ def main():
         if "No resolved" not in summary:
             log.info(summary)
 
-        time.sleep(config.POLL_INTERVAL_SECONDS)
+        time.sleep(_calc_sleep())
 
     log.info("Bot stopped.")
     log.info(trade_logger.summary())
