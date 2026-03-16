@@ -324,10 +324,13 @@ PENGU (+6.4pp)                        ────────●─────
 │                                                                 │
 │   ENTRY SIGNAL:   PENGU candle market exists & is open          │
 │   SIDE:           Always "More Red"                             │
-│   POSITION SIZE:  Fixed (e.g. 5 USD1 per trade)                 │
+│   POSITION SIZE:  $2 USD1 base × hour multiplier (see below)    │
 │   MAX ENTRY PRICE: 0.58 (implied prob ≤ 58%)                   │
 │                                                                 │
-│   That's it. No indicators. No conditions. Pure base rate.      │
+│   Hour-based sizing (UTC):                                      │
+│     2.0x at 06:00, 10:00  (strongest red edge, +9-10pp)        │
+│     0.5x at 09, 15, 16, 22  (weakest edge, +3-4pp)            │
+│     1.0x all other hours                                        │
 │                                                                 │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -367,8 +370,14 @@ Adding conditions would only reduce trade frequency without meaningfully improvi
 ### Trade Flow
 
 ```
-Every 30 seconds:
+Polling synced to 5-min market publish schedule (~12 polls/hour):
 
+    ┌──────────────┐
+    │ Resolve any  │──── Won? ──→ claimWinnings() on-chain
+    │ pending mkts │──── Lost? ──→ Log loss
+    └──────┬───────┘
+           │
+           ▼
     ┌──────────────┐
     │ Poll Myriad  │──── No PENGU market open? ──→ Wait
     │ API for open │
@@ -384,19 +393,20 @@ Every 30 seconds:
            ▼ Price ≤ 0.58
     ┌──────────────┐
     │ Check kill   │──── Daily loss limit hit? ──→ Stop for today
-    │ switches     │──── Binance API down? ──→ Skip
+    │ switches     │──── Rolling green > 50%? ──→ Stop
     └──────┬───────┘
            │
            ▼ All clear
     ┌──────────────┐
-    │ Buy "More    │
-    │ Red" shares  │──→ Log trade (market_id, price, timestamp)
-    │ (5 USD1)     │
+    │ Check USD1   │──── Insufficient balance? ──→ Skip (avoid reverts)
+    │ balance      │
     └──────┬───────┘
            │
-           ▼ Wait for resolution (~13 min)
+           ▼
     ┌──────────────┐
-    │ Check result │──→ Log outcome, update P&L
+    │ Buy "More    │
+    │ Red" shares  │──→ Log trade (market_id, price, timestamp)
+    │ ($2 × mult)  │
     └──────────────┘
 ```
 
@@ -418,15 +428,15 @@ Per $1 wagered:
                           = -$0.218            = -$0.226
   E[net]                  +$0.058 (5.8%)       +$0.044 (4.4%)
 
-Per day (288 windows × $5 per trade = $1,440 wagered):
-  Expected daily P&L:     +$84                 +$63
-  Std dev per trade:      ~$2.50               ~$2.50
-  Daily std dev:          ~$42                 ~$42
+Per day (288 windows × ~$2 avg per trade = ~$576 wagered):
+  Expected daily P&L:     +$33                 +$25
+  Std dev per trade:      ~$1.00               ~$1.00
+  Daily std dev:          ~$17                 ~$17
   Sharpe (daily):         ~2.0                 ~1.5
 
 Per month (30 days):
-  Expected monthly P&L:   +$2,520              +$1,890
-  Monthly std dev:        ~$230                ~$230
+  Expected monthly P&L:   +$1,000              +$750
+  Monthly std dev:        ~$93                 ~$93
 ```
 
 The bull regime is the conservative case. Even there, the edge is +4.4% per dollar wagered — well above zero. The strategy is profitable in both regimes.
@@ -496,55 +506,54 @@ Not recommended for live trading until validated with more data. If enabled:
 
 ```
 myriad-5m-bot/
-├── bot.py              # Main event loop
-├── binance.py          # Binance REST client for 1m candle data
+├── bot.py              # Main event loop (poll → decide → execute → log)
 ├── myriad.py           # Myriad API client (market discovery, odds reading)
-├── execution.py        # Trade execution via polkamarkets-js / contract calls
-├── strategy.py         # Strategy logic (entry signals, position sizing)
-├── config.py           # Configuration (assets, thresholds, sizing)
-├── logger.py           # Trade logging and P&L tracking
+├── execution.py        # On-chain trade execution via web3.py on BSC
+├── strategy.py         # Strategy logic (entry signals, kill switches, bet sizing)
+├── config.py           # Configuration (contracts, ABIs, thresholds, sizing)
+├── logger.py           # CSV trade logging and P&L tracking
 ├── backtest/
 │   └── myriad_backtest.py
 ├── STRATEGY.md
-└── README.md
+└── requirements.txt    # web3>=5,<6 / requests / python-dotenv
 ```
 
 ### Bot Loop
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                        MAIN LOOP (30s)                          │
+│              MAIN LOOP (~5 min cycle, smart polling)             │
 │                                                                 │
 │  ┌─────────┐   ┌──────────┐   ┌──────────┐   ┌─────────────┐  │
-│  │ Myriad  │──▶│ Strategy │──▶│ Execute  │──▶│   Logger    │  │
-│  │ Client  │   │ Engine   │   │          │   │             │  │
-│  │         │   │          │   │          │   │ - trades.csv│  │
-│  │ - find  │   │ - PENGU  │   │ - BSC tx │   │ - daily P&L │  │
-│  │   open  │   │   red?   │   │ - confirm│   │ - win rate  │  │
-│  │   mkts  │   │ - price  │   │          │   │             │  │
-│  │ - read  │   │   check  │   │          │   │             │  │
-│  │   odds  │   │ - kill   │   │          │   │             │  │
-│  │         │   │   switch │   │          │   │             │  │
+│  │ Resolve │──▶│ Myriad   │──▶│ Strategy │──▶│  Execute    │  │
+│  │ Pending │   │ Client   │   │ Engine   │   │  + Logger   │  │
+│  │         │   │          │   │          │   │             │  │
+│  │ - check │   │ - find   │   │ - price  │   │ - BSC tx    │  │
+│  │   result│   │   next   │   │   check  │   │ - confirm   │  │
+│  │ - claim │   │   open   │   │ - kill   │   │ - trades.csv│  │
+│  │   wins  │   │   market │   │   switch │   │ - daily P&L │  │
+│  │         │   │          │   │ - hour   │   │             │  │
+│  │         │   │          │   │   sizing │   │             │  │
 │  └─────────┘   └──────────┘   └──────────┘   └─────────────┘  │
-│       ▲                                                         │
-│       │        ┌──────────┐                                     │
-│       └────────│ Binance  │  (secondary strategy only)          │
-│                │ Client   │                                     │
-│                └──────────┘                                     │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
 ### Execution
 
-Myriad uses an on-chain AMM on BSC. Execution options:
-- **polkamarkets-js SDK** — JavaScript SDK for direct smart contract interaction
-- **Myriad REST API** — If they expose a trade endpoint (needs investigation)
-- **Direct contract calls** — via web3.py / ethers.js to the market contract
+Myriad uses an on-chain AMM on BSC (PredictionMarketV3 contract). No trade API exists — all execution is direct contract calls via web3.py.
+
+- **Contract**: `0x39e66ee6b2ddaf4defded3038e0162180dbef340` (PredictionMarketV3)
+- **Token**: USD1 (`0x8d0D000Ee44948FC98c9B98A4FA4921476f08B0d`, 18 decimals)
+- **Methods**: `buy(marketId, outcomeId, minShares, value)`, `calcBuyAmount(value, marketId, outcomeId)`, `claimWinnings(marketId)`
+- **Winnings must be explicitly claimed** — not auto-paid on resolution
 
 Requirements:
-- BSC wallet with USD1 balance
+- BSC hot wallet with USD1 balance (funds the trades)
 - Private key for signing transactions (stored in .env, never committed)
-- BSC RPC endpoint (public or Ankr/QuickNode)
+- BNB for gas (~$0.01 per tx, ~$3/day at full frequency)
+- BSC RPC endpoint (public Binance RPC by default)
+
+Note: Trades executed directly on-chain do not appear in the Myriad UI, which only tracks trades routed through its frontend.
 
 ---
 
@@ -559,8 +568,5 @@ Requirements:
 
 ## Open Questions
 
-1. Can we get USD1 tokens efficiently? What's the on/off ramp?
-2. Does the Myriad API expose trade/buy endpoints, or must we go through the smart contract?
-3. What's the gas cost per trade on BSC? Need to factor into edge calculation.
-4. Are there rate limits on market discovery API calls?
-5. Will Myriad adjust initial odds if they detect systematic one-sided betting?
+1. Will Myriad adjust initial odds if they detect systematic one-sided betting?
+2. Does trading on-chain (bypassing the UI) affect airdrop eligibility?
